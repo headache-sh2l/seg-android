@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# Gradle / build output
+# ---------------------------------------------------------------------------
+*.iml
+.gradle
+/build
+/captures
+.externalNativeBuild
+.cxx
+.kotlin
+
+# Machine-specific SDK path
+/local.properties
+local.properties
+
+# ---------------------------------------------------------------------------
+# IDEs
+# ---------------------------------------------------------------------------
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+
+# ---------------------------------------------------------------------------
+# Signing / secrets / packaged artefacts
+# ---------------------------------------------------------------------------
+*.jks
+*.keystore
+keystore.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# ---------------------------------------------------------------------------
+# Model binaries
+#
+# These are intentionally NOT committed: they total ~247 MB and one of them
+# (clothseg.tflite, 176 MB) exceeds GitHub's 100 MB per-file hard limit.
+# Fetch them with scripts/download_models.sh — see README "Getting the models".
+# ---------------------------------------------------------------------------
+/app/src/main/assets/models/

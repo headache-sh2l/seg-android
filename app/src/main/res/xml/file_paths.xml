@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Covers getExternalFilesDir(Environment.DIRECTORY_PICTURES)/segmenter_runs
+         (and any other subfolder under the app's external Pictures dir). -->
+    <external-files-path
+        name="segmenter_pictures"
+        path="Pictures/" />
+</paths>
