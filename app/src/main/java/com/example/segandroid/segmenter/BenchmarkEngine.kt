@@ -12,7 +12,7 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Runs benchmarking sessions across one or more [GarmentSegmenter] engines.
+ * Runs benchmarking sessions across one or more [Segmenter] engines.
  *
  * For each engine it performs a warm-up pass, then [generateReport] measured passes,
  * collecting runtime and memory statistics. The first successful output is downscaled to
@@ -39,7 +39,7 @@ class BenchmarkEngine(context: Context) {
      * @param onProgress Invoked as iterations complete so the UI can show live progress.
      */
     suspend fun generateReport(
-        engines: List<GarmentSegmenter>,
+        engines: List<Segmenter>,
         inputBitmap: Bitmap,
         iterations: Int,
         shouldStop: () -> Boolean = { false },
@@ -82,7 +82,7 @@ class BenchmarkEngine(context: Context) {
 
     /** Returns the engine's stats plus whether the run was cut short by [shouldStop]. */
     private suspend fun runSingleEngine(
-        engine: GarmentSegmenter,
+        engine: Segmenter,
         inputBitmap: Bitmap,
         iterations: Int,
         engineIndex: Int,
@@ -184,7 +184,7 @@ class BenchmarkEngine(context: Context) {
     }
 
     private fun buildStats(
-        engine: GarmentSegmenter,
+        engine: Segmenter,
         iterations: Int,
         samples: List<BenchmarkSample>,
         retainedOutput: Bitmap?,

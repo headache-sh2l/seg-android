@@ -58,7 +58,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-private val ITERATION_OPTIONS = listOf(5, 10, 100, 200, 500, 1000)
+private val ITERATION_OPTIONS = listOf(1, 5, 10, 100, 200)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -123,33 +123,44 @@ fun BenchmarkScreen(modifier: Modifier = Modifier) {
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text("1. Models to benchmark", fontWeight = FontWeight.SemiBold)
-                engines.forEach { engine ->
-                    val checked = engine.id in selectedIds
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = checked,
-                            enabled = !isRunning,
-                            onCheckedChange = { isChecked ->
-                                selectedIds = if (isChecked) {
-                                    selectedIds + engine.id
-                                } else {
-                                    selectedIds - engine.id
+                engines
+                    .groupBy { it.category }
+                    .forEach { (category, categoryEngines) ->
+                        Text(
+                            text = category.displayName.uppercase(),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                        )
+                        categoryEngines.forEach { engine ->
+                            val checked = engine.id in selectedIds
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    enabled = !isRunning,
+                                    onCheckedChange = { isChecked ->
+                                        selectedIds = if (isChecked) {
+                                            selectedIds + engine.id
+                                        } else {
+                                            selectedIds - engine.id
+                                        }
+                                    }
+                                )
+                                Column {
+                                    Text(engine.name, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        engine.description,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
-                        )
-                        Column {
-                            Text(engine.name, fontWeight = FontWeight.Medium)
-                            Text(
-                                engine.description,
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
                     }
-                }
             }
         }
 

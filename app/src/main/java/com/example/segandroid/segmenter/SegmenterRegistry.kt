@@ -3,16 +3,16 @@ package com.example.segandroid.segmenter
 import android.content.Context
 
 /**
- * Central registry for plug-and-play Garment Segmenter models.
+ * Central registry for plug-and-play Segmenter models.
  */
 object SegmenterRegistry {
 
-    private val engineFactories = mutableMapOf<String, (Context) -> GarmentSegmenter>()
+    private val engineFactories = mutableMapOf<String, (Context) -> Segmenter>()
 
     init {
         // Register default built-in engines
-        register("mlkit_subject") { MlKitGarmentSegmenter() }
-        register("u2net_cloth_litert") { MediaPipeGarmentSegmenter(it) }
+        register("mlkit_subject") { MlKitSegmenter() }
+        register("u2net_cloth_litert") { MediaPipeSegmenter(it) }
 
         // SegFormer-B2 INT8 Clothes Parser (Active)
         register("segformer_b2_onnx") {
@@ -47,27 +47,20 @@ object SegmenterRegistry {
             )
         }
 
-        register("mock_emulator") { MockGarmentSegmenter() }
+        register("mock_emulator") { MockSegmenter() }
     }
 
     /**
      * Registers a new segmenter engine into the application.
      */
-    fun register(id: String, factory: (Context) -> GarmentSegmenter) {
+    fun register(id: String, factory: (Context) -> Segmenter) {
         engineFactories[id] = factory
     }
 
     /**
      * Returns instances of all registered segmenter engines.
      */
-    fun getAllEngines(context: Context): List<GarmentSegmenter> {
+    fun getAllEngines(context: Context): List<Segmenter> {
         return engineFactories.values.map { it(context) }
-    }
-
-    /**
-     * Retrieves a specific engine by ID.
-     */
-    fun getEngine(id: String, context: Context): GarmentSegmenter? {
-        return engineFactories[id]?.invoke(context)
     }
 }

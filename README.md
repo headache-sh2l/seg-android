@@ -1,8 +1,12 @@
 # seg-android
 
-An on-device **garment segmentation workbench** for Android. Swap between several
+An on-device **image segmentation workbench** for Android. Swap between several
 segmentation engines, run them side by side, and benchmark their runtime and memory
 cost — all offline, on the GPU/CPU of the device.
+
+Models are grouped into **categories** — the Segment screen picks a category first, then
+an engine within it. Every engine currently ships under `Fashion`; adding a new domain is
+a one-line enum entry. See [Adding categories](#adding-categories).
 
 Built with Kotlin + Jetpack Compose (Material 3).
 
@@ -10,11 +14,11 @@ Built with Kotlin + Jetpack Compose (Material 3).
 
 ## Features
 
-**Segment** — pick an engine, pick a photo, get a cut-out. Tap the result to inspect it
-full-screen.
+**Segment** — pick a **category**, pick an engine within it, pick a photo, get a cut-out.
+Tap the result to inspect it full-screen.
 
 **Benchmark** — select any subset of engines, choose an iteration count
-(`5 / 10 / 100 / 200 / 500 / 1000`) and run them. Each engine is warmed up first, then
+(`1 / 5 / 10 / 100 / 200`) and run them. Each engine is warmed up first, then
 measured. You get, per model:
 
 | Runtime | Cost to run |
@@ -91,26 +95,74 @@ fail at runtime.
 
 ## Engines
 
-| Dropdown entry | Class | Backend | Asset |
-|---|---|---|---|
-| `MLKit_Subject_Single_v1` | `MlKitGarmentSegmenter` | ML Kit subject segmentation | — (Play Services) |
-| `U2Net_Cloth_LiteRT_v1` | `MediaPipeGarmentSegmenter` | raw TFLite `Interpreter` | `clothseg.tflite` |
-| `SegFormer_B2_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_clothes.onnx` |
-| `SegFormer_B0_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_b0_q8.onnx` |
-| `SegFormer_B3_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_b3_q8.onnx` |
-| `Mock_Segmenter_V1` | `MockGarmentSegmenter` | none | — |
+Models are grouped by **category** in the pickers. Today every engine ships under
+`Fashion`.
 
-Add your own by registering a factory in `SegmenterRegistry`:
+| Category | Dropdown entry | Class | Backend | Asset |
+|---|---|---|---|---|
+| Fashion | `MLKit_Subject_Single_v1` | `MlKitSegmenter` | ML Kit subject segmentation | — (Play Services) |
+| Fashion | `U2Net_Cloth_LiteRT_v1` | `MediaPipeSegmenter` | raw TFLite `Interpreter` | `clothseg.tflite` |
+| Fashion | `SegFormer_B2_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_clothes.onnx` |
+| Fashion | `SegFormer_B0_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_b0_q8.onnx` |
+| Fashion | `SegFormer_B3_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_b3_q8.onnx` |
+| Fashion | `Mock_Segmenter_V1` | `MockSegmenter` | none | — |
+
+### Adding your own engine
+
+Register a factory in `SegmenterRegistry`:
 
 ```kotlin
-register("my_engine") { MyGarmentSegmenter(it) }
+register("my_engine") { MySegmenter(it) }
 ```
 
-Any class implementing `GarmentSegmenter` (`id`, `name`, `description`, `suspend segment()`)
-shows up automatically in both the Segment and Benchmark screens.
+Any class implementing `Segmenter` (`id`, `name`, `description`, `category`,
+`suspend segment()`) shows up automatically in both the Segment and Benchmark screens.
+The `category` property is **optional** and defaults to `SegmenterCategory.FASHION`, so
+existing segmenters keep working unchanged:
+
+```kotlin
+class MySegmenter(context: Context) : Segmenter {
+    override val id = "my_engine"
+    override val name = "My_Engine_V1"
+    override val description = "My custom segmenter"
+    override val category = SegmenterCategory.INTERIORS   // optional; defaults to FASHION
+    override suspend fun segment(inputBitmap: Bitmap): Result<SegmentResult> { /* … */ }
+}
+```
+
+### Adding categories
+
+Everything else — the Category dropdown and the per-category model filter — adapts
+automatically. To add a domain:
+
+1. Add an entry to `SegmenterCategory`. The declaration order is the order shown in the
+   picker:
+
+   ```kotlin
+   enum class SegmenterCategory(val displayName: String) {
+       FASHION("Fashion"),
+       INTERIORS("Interiors"),   // new
+   }
+   ```
+
+2. Tag its models by overriding `category` (see above), or — for the generic ONNX
+   segmenter — pass it through the registry:
+
+   ```kotlin
+   register("segformer_interiors") {
+       OnnxSegFormerSegmenter(
+           context = it,
+           id = "segformer_interiors",
+           name = "SegFormer_Interiors_Q8",
+           description = "SegFormer interiors parser (ONNX - INT8)",
+           category = SegmenterCategory.INTERIORS,
+           modelAssetPath = "models/segformer_interiors.onnx",
+       )
+   }
+   ```
 
 > [!NOTE]
-> Naming gotcha: `MediaPipeGarmentSegmenter` does **not** use MediaPipe — it drives a plain
+> Naming gotcha: `MediaPipeSegmenter` does **not** use MediaPipe — it drives a plain
 > TensorFlow Lite `Interpreter`, and `clothseg.tflite` is the U2Net "cloth segmentation"
 > model.
 
@@ -122,9 +174,10 @@ shows up automatically in both the Segment and Benchmark screens.
 app/src/main/java/com/example/segandroid/
 ├── MainActivity.kt                 # Segment / Benchmark / History tabs
 ├── segmenter/
-│   ├── GarmentSegmenter.kt         # the plug-in interface
+│   ├── Segmenter.kt                # the plug-in interface
+│   ├── SegmenterCategory.kt        # model categories (Fashion, …)
 │   ├── SegmenterRegistry.kt        # registers every engine
-│   ├── *GarmentSegmenter.kt        # the concrete engines
+│   ├── *Segmenter.kt               # the concrete engines
 │   ├── BenchmarkEngine.kt          # warm-up, iteration loop, stats
 │   ├── BenchmarkResult.kt          # sample / stats / report models
 │   ├── HistoryStore.kt             # persistence, thumbnails, 10+20 retention

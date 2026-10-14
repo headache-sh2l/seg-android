@@ -20,8 +20,9 @@ class OnnxSegFormerSegmenter(
     override val id: String = "segformer_clothes_onnx",
     override val name: String = "SegFormer_B2_CP_ONNX_Q8",
     override val description: String = "SegFormer-B2 Clothes Parser (ONNX - INT8, 18-class)",
+    override val category: SegmenterCategory = SegmenterCategory.FASHION,
     private val modelAssetPath: String = "models/segformer_clothes.onnx"
-) : GarmentSegmenter {
+) : Segmenter {
 
     private val env by lazy { OrtEnvironment.getEnvironment() }
 

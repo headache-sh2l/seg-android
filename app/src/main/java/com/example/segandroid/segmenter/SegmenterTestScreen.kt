@@ -57,7 +57,10 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
 
     val engines = remember(context) { SegmenterRegistry.getAllEngines(context) }
     val historyStore = remember(context) { HistoryStore(context) }
-    var selectedIndex by remember { mutableStateOf(0) }
+    val categories = remember(engines) { engines.map { it.category }.distinct().sortedBy { it.ordinal } }
+    var selectedCategory by remember { mutableStateOf(categories.first()) }
+    var selectedId by remember { mutableStateOf(engines.first().id) }
+    var categoryMenuOpen by remember { mutableStateOf(false) }
     var dropdownExpanded by remember { mutableStateOf(false) }
 
     var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -85,7 +88,8 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    val currentEngine = engines[selectedIndex]
+    val modelsInCategory = engines.filter { it.category == selectedCategory }
+    val currentEngine = modelsInCategory.firstOrNull { it.id == selectedId } ?: modelsInCategory.first()
 
     Column(
         modifier = modifier
@@ -96,11 +100,48 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "Garment Segmenter",
+            text = "Segmenter",
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold
         )
 
+        // 1. Category ("type") selector
+        ExposedDropdownMenuBox(
+            expanded = categoryMenuOpen,
+            onExpandedChange = { categoryMenuOpen = !categoryMenuOpen }
+        ) {
+            OutlinedTextField(
+                value = selectedCategory.displayName,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Category") },
+                trailingIcon = {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryMenuOpen)
+                },
+                modifier = Modifier
+                    .menuAnchor()
+                    .fillMaxWidth()
+            )
+
+            ExposedDropdownMenu(
+                expanded = categoryMenuOpen,
+                onDismissRequest = { categoryMenuOpen = false }
+            ) {
+                categories.forEach { category ->
+                    DropdownMenuItem(
+                        text = { Text(category.displayName) },
+                        onClick = {
+                            selectedCategory = category
+                            // Snap the model selection to the first model of the new category.
+                            engines.firstOrNull { it.category == category }?.let { selectedId = it.id }
+                            categoryMenuOpen = false
+                        }
+                    )
+                }
+            }
+        }
+
+        // 2. Model selector, filtered to the chosen category
         ExposedDropdownMenuBox(
             expanded = dropdownExpanded,
             onExpandedChange = { dropdownExpanded = !dropdownExpanded }
@@ -109,7 +150,7 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
                 value = currentEngine.name,
                 onValueChange = {},
                 readOnly = true,
-                label = { Text("Segmentation workflow") },
+                label = { Text("Model") },
                 supportingText = { Text(currentEngine.description) },
                 trailingIcon = {
                     ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
@@ -123,7 +164,7 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
                 expanded = dropdownExpanded,
                 onDismissRequest = { dropdownExpanded = false }
             ) {
-                engines.forEachIndexed { index, engine ->
+                modelsInCategory.forEach { engine ->
                     DropdownMenuItem(
                         text = {
                             Column {
@@ -136,7 +177,7 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
                             }
                         },
                         onClick = {
-                            selectedIndex = index
+                            selectedId = engine.id
                             dropdownExpanded = false
                         }
                     )

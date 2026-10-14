@@ -14,19 +14,19 @@ This document defines the architectural guidelines and design patterns for the *
 
 ## Plug-and-Play ML Segmenter Subsystem
 
-The garment segmentation pipeline is engineered using the **Registry Pattern** and **Strategy Pattern** to ensure new ML models (ML Kit, MediaPipe, custom TFLite, ONNX, etc.) can be added as **plug-and-play modules without modifying existing UI or screen logic**.
+The segmentation pipeline is engineered using the **Registry Pattern** and **Strategy Pattern** to ensure new ML models (ML Kit, MediaPipe, custom TFLite, ONNX, etc.) can be added as **plug-and-play modules without modifying existing UI or screen logic**.
 
 ```
                        ┌─────────────────────────┐
-                       │    GarmentSegmenter     │ (Interface)
-                       │  - id, name, description │
-                       │  - segment(bitmap)      │
+                       │        Segmenter        │ (Interface)
+                       │  - id, name, description│
+                       │  - category             │
                        └────────────▲────────────┘
                                     │
            ┌────────────────────────┼────────────────────────┐
            │                        │                        │
 ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
-│MlKitGarmentSegmenter│  │  MediaPipeSegmenter │  │ MockGarmentSegmenter│
+│   MlKitSegmenter    │  │ MediaPipeSegmenter  │  │   MockSegmenter     │
 └─────────────────────┘  └─────────────────────┘  └─────────────────────┘
            │                        │                        │
            └────────────────────────┴────────────────────────┘
@@ -44,11 +44,12 @@ The garment segmentation pipeline is engineered using the **Registry Pattern** a
 
 ### Component Contracts
 
-#### 1. Interface: `GarmentSegmenter`
-Every segmentation engine must implement [GarmentSegmenter](file:///Users/jvk/Workspace/AndroidStudio/HelloWorld/app/src/main/java/com/example/myapplication/segmenter/GarmentSegmenter.kt):
+#### 1. Interface: `Segmenter`
+Every segmentation engine must implement [Segmenter](file:///Users/jvk/Workspace/AndroidStudio/seg-android/app/src/main/java/com/example/segandroid/segmenter/Segmenter.kt):
 * `id: String` — Unique identifier key (e.g. `"mlkit_subject"`).
 * `name: String` — Human-readable display name for UI dropdowns.
 * `description: String` — Brief summary of model architecture/technology.
+* `category: SegmenterCategory` — Broad grouping (e.g. `Fashion`) used by the two-level picker; defaults to `FASHION`.
 * `suspend fun segment(inputBitmap: Bitmap): Result<SegmentResult>` — Asynchronous execution returning transparent foreground cutout and benchmark metadata.
 
 #### 2. Result Model: `SegmentResult`
@@ -60,12 +61,12 @@ Output container [SegmentResult](file:///Users/jvk/Workspace/AndroidStudio/Hello
 
 #### 3. Central Registry: `SegmenterRegistry`
 Singleton [SegmenterRegistry](file:///Users/jvk/Workspace/AndroidStudio/HelloWorld/app/src/main/java/com/example/myapplication/segmenter/SegmenterRegistry.kt) managing engine providers:
-* Maintains a map of `(Context) -> GarmentSegmenter` factory functions.
+* Maintains a map of `(Context) -> Segmenter` factory functions.
 * Dynamically supplies `getAllEngines(context)` to UI dropdowns.
 
 ### How to Add a New ML Model (Developer Guide)
-1. **Create Engine Class**: Implement `GarmentSegmenter` in `segmenter/` (e.g., `MediaPipeGarmentSegmenter.kt`).
-2. **Register Engine**: In `SegmenterRegistry.init`, add `register("engine_id") { MediaPipeGarmentSegmenter(it) }`.
+1. **Create Engine Class**: Implement `Segmenter` in `segmenter/` (e.g., `MediaPipeSegmenter.kt`).
+2. **Register Engine**: In `SegmenterRegistry.init`, add `register("engine_id") { MediaPipeSegmenter(it) }`.
 3. **Done**: The UI dropdown automatically discovers and displays the new model with zero UI code modifications!
 
 ---
@@ -81,13 +82,14 @@ app/src/main/java/com/example/myapplication/
 │   ├── image/           # On-device ImageStorage (internal storage saver)
 │   └── repository/      # ClothingRepository mapping Entities <-> Domain Models
 ├── segmenter/           # Plug-and-Play Segmenter Subsystem
-│   ├── GarmentSegmenter.kt
+│   ├── Segmenter.kt
+│   ├── SegmenterCategory.kt
 │   ├── SegmentResult.kt
 │   ├── SegmenterRegistry.kt
-│   ├── MlKitGarmentSegmenter.kt
-│   ├── MediaPipeGarmentSegmenter.kt
+│   ├── MlKitSegmenter.kt
+│   ├── MediaPipeSegmenter.kt
 │   ├── OnnxSegFormerSegmenter.kt
-│   └── MockGarmentSegmenter.kt
+│   └── MockSegmenter.kt
 └── ui/                  # Compose UI Screens & ViewModels
     └── segmenter/
         └── SegmenterTestScreen.kt
@@ -107,3 +109,4 @@ app/src/main/java/com/example/myapplication/
 | 2026-02 | 1.0.0 | Established initial Clean Architecture, Plug-and-Play Segmenter Subsystem (`GarmentSegmenter` interface, `SegmenterRegistry`, `SegmentResult` benchmark model), and Edge-to-Edge Compose scaffolding. | Core Dev |
 | 2026-02 | 1.1.0 | Added Google MediaPipe Tasks Vision dependency (`com.google.mediapipe:tasks-vision`), implemented `MediaPipeGarmentSegmenter`, registered in `SegmenterRegistry`. | Core Dev |
 | 2026-02 | 1.2.0 | Added ONNX Runtime for Android (`com.microsoft.onnxruntime:onnxruntime-android`), implemented `OnnxSegFormerSegmenter` (SegFormer Vision Transformer apparel parser), registered in `SegmenterRegistry`. | Core Dev |
+| 2026-02 | 1.3.0 | Generalized beyond apparel: added `SegmenterCategory` (currently `Fashion`) with a two-level Category + Model picker; renamed `GarmentSegmenter` → `Segmenter` (and `MlKitGarmentSegmenter`/`MediaPipeGarmentSegmenter`/`MockGarmentSegmenter` → `MlKitSegmenter`/`MediaPipeSegmenter`/`MockSegmenter`). | Core Dev |
