@@ -1,19 +1,27 @@
 package com.example.segandroid.segmenter
 
+import ai.onnxruntime.NodeInfo
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import ai.onnxruntime.TensorInfo
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.SystemClock
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.FloatBuffer
 
 /**
- * On-device reusable fashion parsing segmenter powered by ONNX Runtime and SegFormer models.
- * Accepts any SegFormer ONNX asset file (B0, B2, B3) and handles input/output tensor shapes.
+ * Generic ONNX Runtime segmenter for SegFormer-style semantic-segmentation models
+ * (B0 / B2 / B3 / ...).
+ *
+ * Model *facts* — input size and output class count — are read from the ONNX graph at load
+ * time, and the class *labels* are supplied per model (see [ModelLabels]). Which labels to
+ * keep is decided by [GarmentKeepPolicy] by name, so models with different label spaces
+ * (ATR-18, Fashionpedia-47, ...) all work without per-model class-id hardcoding.
  */
 class OnnxSegFormerSegmenter(
     private val context: Context,
@@ -21,14 +29,20 @@ class OnnxSegFormerSegmenter(
     override val name: String = "SegFormer_B2_CP_ONNX_Q8",
     override val description: String = "SegFormer-B2 Clothes Parser (ONNX - INT8, 18-class)",
     override val category: SegmenterCategory = SegmenterCategory.FASHION,
-    private val modelAssetPath: String = "models/segformer_clothes.onnx"
+    /** Index -> class name for this model (from its HuggingFace `config.json` `id2label`). */
+    private val labels: List<String> = ModelLabels.ATR_18,
+    private val modelAssetPath: String = "models/segformer_clothes.onnx",
+    private val mean: FloatArray = floatArrayOf(0.485f, 0.456f, 0.406f),
+    private val std: FloatArray = floatArrayOf(0.229f, 0.224f, 0.225f),
+    /** Fallback input edge length, used only when the ONNX input shape is dynamic. */
+    private val fallbackInputSize: Int = 512,
 ) : Segmenter {
 
     private val env by lazy { OrtEnvironment.getEnvironment() }
 
     private val session by lazy {
         val modelBytes = context.assets.open(modelAssetPath).use { it.readBytes() }
-        env.createSession(modelBytes, OrtSession.SessionOptions())
+        env.createSession(modelBytes, OrtSession.SessionOptions()).also { validateModel(it) }
     }
 
     override suspend fun segment(inputBitmap: Bitmap): Result<SegmentResult> {
@@ -36,12 +50,9 @@ class OnnxSegFormerSegmenter(
             try {
                 val startTimeMs = SystemClock.elapsedRealtime()
 
-                val inputInfo = session.inputInfo
-                val inputName = inputInfo.keys.first()
-
-                // Standard SegFormer input dimensions (512x512)
-                val width = 512
-                val height = 512
+                val inputName = session.inputInfo.keys.first()
+                val width = resolveInputSize(session)
+                val height = width
 
                 val scaledBitmap = Bitmap.createScaledBitmap(inputBitmap, width, height, true)
                 val inputFloatBuffer = bitmapToNormalizedFloatBuffer(scaledBitmap, width, height)
@@ -55,29 +66,25 @@ class OnnxSegFormerSegmenter(
                 val results = session.run(mapOf(inputName to inputTensor))
                 val executionTimeMs = SystemClock.elapsedRealtime() - startTimeMs
 
-                val resultValue = results[0].value
-
-                val foregroundBitmap = when (resultValue) {
-                    is Array<*> -> {
-                        @Suppress("UNCHECKED_CAST")
-                        val logits4D = resultValue as Array<Array<Array<FloatArray>>>
-                        extractClothingFrom4DArray(scaledBitmap, logits4D[0], width, height)
-                    }
-                    else -> {
-                        val outputTensor = results[0] as OnnxTensor
-                        extractClothingFromLogitsBuffer(scaledBitmap, outputTensor.floatBuffer, width, height)
-                    }
+                val outputTensor = results[0] as? OnnxTensor
+                    ?: error("Model '$name' did not return a tensor output.")
+                val foregroundBitmap = try {
+                    decodeOutput(outputTensor, scaledBitmap, width, height)
+                } finally {
+                    inputTensor.close()
+                    results.close()
                 }
-
-                inputTensor.close()
-                results.close()
 
                 Result.success(
                     SegmentResult(
                         foregroundBitmap = foregroundBitmap,
                         executionTimeMs = executionTimeMs,
                         engineName = name,
-                        details = mapOf("model" to modelAssetPath, "input" to "${width}x${height}")
+                        details = mapOf(
+                            "model" to modelAssetPath,
+                            "input" to "${width}x$height",
+                            "classes" to labels.size.toString(),
+                        )
                     )
                 )
             } catch (e: Exception) {
@@ -86,127 +93,151 @@ class OnnxSegFormerSegmenter(
         }
     }
 
+    // ----- model introspection -------------------------------------------------
+
+    private fun shapeOf(infos: Map<String, NodeInfo>): LongArray? =
+        (infos.values.firstOrNull()?.info as? TensorInfo)?.shape
+
     /**
-     * Converts a Bitmap to an NCHW Normalized FloatBuffer using ImageNet mean & std.
+     * Fails loudly (rather than silently producing an empty mask) when a model's declared
+     * labels don't line up with the number of classes it actually outputs.
      */
+    private fun validateModel(session: OrtSession) {
+        val inputShape = shapeOf(session.inputInfo)?.joinToString("x") ?: "?"
+        val outputShape = shapeOf(session.outputInfo)?.joinToString("x") ?: "?"
+        val outputClasses = outputClassCount(session)
+        Log.i(TAG, "'$name' ($modelAssetPath): input=[$inputShape] output=[$outputShape] labels=${labels.size}")
+        if (outputClasses > 0 && outputClasses != labels.size) {
+            error(
+                "Label count mismatch for '$name': the ONNX model outputs $outputClasses classes but " +
+                    "${labels.size} labels are configured ($modelAssetPath). Update ModelLabels for this model."
+            )
+        }
+    }
+
+    /** Input edge length from the ONNX input shape, falling back when it is dynamic. */
+    private fun resolveInputSize(session: OrtSession): Int {
+        val dims = shapeOf(session.inputInfo)?.map { it.toInt() } ?: return fallbackInputSize
+        val edge = when {
+            dims.size == 4 && dims[1] == 3 -> dims.last()       // NCHW [1,3,H,W]
+            dims.size == 4 && dims.last() == 3 -> dims[1]       // NHWC [1,H,W,3]
+            else -> -1
+        }
+        return if (edge > 0) edge else fallbackInputSize
+    }
+
+    /** Number of output classes from the ONNX output shape, or -1 when it is dynamic. */
+    private fun outputClassCount(session: OrtSession): Int {
+        val dims = shapeOf(session.outputInfo)?.map { it.toInt() } ?: return -1
+        return if (dims.size == 4 && dims[1] > 0) dims[1] else -1
+    }
+
+    // ----- output decoding -----------------------------------------------------
+
+    private fun decodeOutput(output: OnnxTensor, original: Bitmap, width: Int, height: Int): Bitmap {
+        return when (val value = output.value) {
+            // SegFormer logits as a nested array: [1][classes][maskHeight][maskWidth]
+            is Array<*> -> {
+                @Suppress("UNCHECKED_CAST")
+                val logits = value as Array<Array<Array<FloatArray>>>
+                val perClass = logits[0]
+                val classes = perClass.size
+                val maskHeight = if (classes > 0) perClass[0].size else 0
+                val maskWidth = if (maskHeight > 0) perClass[0][0].size else 0
+                buildCutout(original, classes, maskHeight, maskWidth, width, height) { c, y, x ->
+                    perClass[c][y][x]
+                }
+            }
+            // Flat float buffer: [1][classes][maskHeight][maskWidth] in NCHW order
+            else -> {
+                val shape = output.info.shape
+                val classes = shape[1].toInt()
+                val maskHeight = shape[2].toInt()
+                val maskWidth = shape[3].toInt()
+                val buffer = output.floatBuffer
+                buffer.rewind()
+                val floats = FloatArray(buffer.remaining())
+                buffer.get(floats)
+                val plane = maskHeight * maskWidth
+                buildCutout(original, classes, maskHeight, maskWidth, width, height) { c, y, x ->
+                    floats[c * plane + y * maskWidth + x]
+                }
+            }
+        }
+    }
+
+    /**
+     * Picks, per output pixel, the highest-logit class and keeps the pixel only when
+     * [GarmentKeepPolicy] keeps that class's label. The mask is nearest-neighbour upsampled
+     * to [width] x [height].
+     */
+    private fun buildCutout(
+        original: Bitmap,
+        classes: Int,
+        maskHeight: Int,
+        maskWidth: Int,
+        width: Int,
+        height: Int,
+        logit: (c: Int, y: Int, x: Int) -> Float,
+    ): Bitmap {
+        if (classes != labels.size) {
+            error(
+                "Label count mismatch for '$name': model produced $classes classes but " +
+                    "${labels.size} labels are configured."
+            )
+        }
+
+        val pixels = IntArray(width * height)
+        original.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        for (y in 0 until height) {
+            val maskY = (y * maskHeight / height).coerceIn(0, maskHeight - 1)
+            for (x in 0 until width) {
+                val maskX = (x * maskWidth / width).coerceIn(0, maskWidth - 1)
+
+                var maxClass = 0
+                var maxLogit = Float.NEGATIVE_INFINITY
+                for (c in 0 until classes) {
+                    val value = logit(c, maskY, maskX)
+                    if (value > maxLogit) {
+                        maxLogit = value
+                        maxClass = c
+                    }
+                }
+
+                if (!GarmentKeepPolicy.shouldKeep(labels[maxClass])) {
+                    pixels[y * width + x] = Color.TRANSPARENT
+                }
+            }
+        }
+
+        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        output.setPixels(pixels, 0, width, 0, 0, width, height)
+        return output
+    }
+
+    /** Converts a Bitmap to an NCHW normalized FloatBuffer using this model's mean/std. */
     private fun bitmapToNormalizedFloatBuffer(bitmap: Bitmap, width: Int, height: Int): FloatBuffer {
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        val floatBuffer = FloatBuffer.allocate(1 * 3 * height * width)
-
-        val mean = floatArrayOf(0.485f, 0.456f, 0.406f)
-        val std = floatArrayOf(0.229f, 0.224f, 0.225f)
-
-        val rOffset = 0
-        val gOffset = height * width
-        val bOffset = 2 * height * width
-
-        val floats = FloatArray(3 * height * width)
+        val plane = height * width
+        val floats = FloatArray(3 * plane)
 
         for (i in pixels.indices) {
             val px = pixels[i]
-            val r = (((px shr 16) and 0xFF) / 255.0f - mean[0]) / std[0]
-            val g = (((px shr 8) and 0xFF) / 255.0f - mean[1]) / std[1]
-            val b = ((px and 0xFF) / 255.0f - mean[2]) / std[2]
-
-            floats[rOffset + i] = r
-            floats[gOffset + i] = g
-            floats[bOffset + i] = b
+            floats[i] = (((px shr 16) and 0xFF) / 255.0f - mean[0]) / std[0]
+            floats[plane + i] = (((px shr 8) and 0xFF) / 255.0f - mean[1]) / std[1]
+            floats[2 * plane + i] = ((px and 0xFF) / 255.0f - mean[2]) / std[2]
         }
 
+        val floatBuffer = FloatBuffer.allocate(3 * plane)
         floatBuffer.put(floats)
         floatBuffer.rewind()
         return floatBuffer
     }
 
-    /**
-     * Decodes 3D logits array [numClasses, maskHeight, maskWidth] (18x128x128 for SegFormer).
-     * Retains ONLY clothing classes (Upper-clothes, Skirt, Pants, Dress, Shoes) while
-     * excluding Background (0), Skin (8), Face (11), and Arms (14, 15).
-     */
-    private fun extractClothingFrom4DArray(original: Bitmap, logits3D: Array<Array<FloatArray>>, width: Int, height: Int): Bitmap {
-        val numClasses = logits3D.size
-        val maskHeight = logits3D[0].size
-        val maskWidth = if (maskHeight > 0) logits3D[0][0].size else 128
-
-        val pixels = IntArray(width * height)
-        original.getPixels(pixels, 0, width, 0, 0, width, height)
-
-        // Clothing Category Class IDs in ATR dataset (4=Upper, 5=Skirt, 6=Pants, 7=Dress, 9=Shoe, 10=Shoe, 17=Scarf)
-        val clothingClasses = setOf(4, 5, 6, 7, 9, 10, 17)
-
-        for (y in 0 until height) {
-            val maskY = (y * maskHeight / height).coerceIn(0, maskHeight - 1)
-            for (x in 0 until width) {
-                val maskX = (x * maskWidth / width).coerceIn(0, maskWidth - 1)
-
-                var maxClass = 0
-                var maxLogit = Float.NEGATIVE_INFINITY
-
-                for (c in 0 until numClasses) {
-                    val logit = logits3D[c][maskY][maskX]
-                    if (logit > maxLogit) {
-                        maxLogit = logit
-                        maxClass = c
-                    }
-                }
-
-                // If winning class is NOT clothing (e.g. background, arm, skin, face), set transparent!
-                if (maxClass !in clothingClasses) {
-                    pixels[y * width + x] = Color.TRANSPARENT
-                }
-            }
-        }
-
-        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        output.setPixels(pixels, 0, width, 0, 0, width, height)
-        return output
-    }
-
-    private fun extractClothingFromLogitsBuffer(original: Bitmap, outputBuffer: FloatBuffer, width: Int, height: Int): Bitmap {
-        outputBuffer.rewind()
-        val numClasses = 18
-        val maskHeight = 128
-        val maskWidth = 128
-        val planeSize = maskHeight * maskWidth
-
-        val floats = FloatArray(outputBuffer.remaining())
-        outputBuffer.get(floats)
-
-        val pixels = IntArray(width * height)
-        original.getPixels(pixels, 0, width, 0, 0, width, height)
-
-        val clothingClasses = setOf(4, 5, 6, 7, 9, 10, 17)
-
-        for (y in 0 until height) {
-            val maskY = (y * maskHeight / height).coerceIn(0, maskHeight - 1)
-            for (x in 0 until width) {
-                val maskX = (x * maskWidth / width).coerceIn(0, maskWidth - 1)
-                val maskIndex = maskY * maskWidth + maskX
-
-                var maxClass = 0
-                var maxLogit = Float.NEGATIVE_INFINITY
-
-                for (c in 0 until numClasses) {
-                    val index = c * planeSize + maskIndex
-                    if (index < floats.size) {
-                        val logit = floats[index]
-                        if (logit > maxLogit) {
-                            maxLogit = logit
-                            maxClass = c
-                        }
-                    }
-                }
-
-                if (maxClass !in clothingClasses) {
-                    pixels[y * width + x] = Color.TRANSPARENT
-                }
-            }
-        }
-
-        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        output.setPixels(pixels, 0, width, 0, 0, width, height)
-        return output
+    private companion object {
+        const val TAG = "OnnxSegmenter"
     }
 }

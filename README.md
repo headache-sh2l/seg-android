@@ -66,17 +66,16 @@ Then open the folder in Android Studio and Run. Or from the CLI:
 ## Getting the models
 
 > [!IMPORTANT]
-> The model binaries are **not committed** to this repo. They total ~247 MB, and
+> The model binaries are **not committed** to this repo. They total ~209 MB, and
 > `clothseg.tflite` alone is 176 MB, which exceeds GitHub's 100 MB per-file hard limit.
 
 Put them in **`app/src/main/assets/models/`**. Expected files:
 
-| File | Size | Used by |
-|---|---|---|
-| `segformer_clothes.onnx` | 28.6 MB | SegFormer_B2_CP_ONNX_Q8 |
-| `segformer_b0_q8.onnx` | 4.4 MB | SegFormer_B0_CP_ONNX_Q8 |
-| `segformer_b3_q8.onnx` | 49 MB | SegFormer_B3_CP_ONNX_Q8 |
-| `clothseg.tflite` | 176 MB | U2Net_Cloth_LiteRT_v1 |
+| File | Size | Used by | Source |
+|---|---|---|---|
+| `segformer_clothes.onnx` | 28.6 MB | SegFormer_B2_CP_ONNX_Q8 | [mattmdjaga/segformer_b2_clothes](https://huggingface.co/mattmdjaga/segformer_b2_clothes) |
+| `segformer_b0_q8.onnx` | 4.4 MB | SegFormer_B0_CP_ONNX_Q8 | [Xenova/segformer_b0_clothes](https://huggingface.co/Xenova/segformer_b0_clothes) |
+| `clothseg.tflite` | 176 MB | U2Net_Cloth_LiteRT_v1 | [litert-community/Cloth-Segmentation-U2Net-LiteRT](https://huggingface.co/litert-community/Cloth-Segmentation-U2Net-LiteRT) |
 
 **Either:**
 
@@ -104,7 +103,6 @@ Models are grouped by **category** in the pickers. Today every engine ships unde
 | Fashion | `U2Net_Cloth_LiteRT_v1` | `MediaPipeSegmenter` | raw TFLite `Interpreter` | `clothseg.tflite` |
 | Fashion | `SegFormer_B2_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_clothes.onnx` |
 | Fashion | `SegFormer_B0_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_b0_q8.onnx` |
-| Fashion | `SegFormer_B3_CP_ONNX_Q8` | `OnnxSegFormerSegmenter` | ONNX Runtime | `segformer_b3_q8.onnx` |
 | Fashion | `Mock_Segmenter_V1` | `MockSegmenter` | none | — |
 
 ### Adding your own engine

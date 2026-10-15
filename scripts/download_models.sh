@@ -20,9 +20,12 @@ DEST="$REPO_ROOT/app/src/main/assets/models"
 # Configure your sources here.
 # NOTE: these are left blank on purpose — fill in the exact URLs you use.
 # ---------------------------------------------------------------------------
+# Model sources (export/download the ONNX or TFLite from these repos):
+#   segformer_clothes.onnx   -> https://huggingface.co/mattmdjaga/segformer_b2_clothes
+#   segformer_b0_q8.onnx     -> https://huggingface.co/Xenova/segformer_b0_clothes
+#   clothseg.tflite          -> https://huggingface.co/litert-community/Cloth-Segmentation-U2Net-LiteRT
 URL_SEGFORMER_CLOTHES="${URL_SEGFORMER_CLOTHES:-}"   # -> segformer_clothes.onnx
 URL_SEGFORMER_B0="${URL_SEGFORMER_B0:-}"             # -> segformer_b0_q8.onnx
-URL_SEGFORMER_B3="${URL_SEGFORMER_B3:-}"             # -> segformer_b3_q8.onnx
 URL_CLOTHSEG_TFLITE="${URL_CLOTHSEG_TFLITE:-}"       # -> clothseg.tflite
 
 mkdir -p "$DEST"
@@ -31,7 +34,6 @@ mkdir -p "$DEST"
 MODELS=(
   "segformer_clothes.onnx|28635315|$URL_SEGFORMER_CLOTHES|SegFormer-B2 clothes parser (ONNX, INT8, 18-class)"
   "segformer_b0_q8.onnx|4384537|$URL_SEGFORMER_B0|SegFormer-B0 clothes parser (ONNX, INT8)"
-  "segformer_b3_q8.onnx|49297337|$URL_SEGFORMER_B3|SegFormer-B3 clothes parser (ONNX, INT8)"
   "clothseg.tflite|176300680|$URL_CLOTHSEG_TFLITE|Cloth-Segmentation-U2Net-LiteRT (TFLite)"
 )
 
