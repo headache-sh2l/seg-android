@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -45,6 +47,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -69,6 +72,7 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
     var isProcessing by remember { mutableStateOf(false) }
     var lastSavedPath by remember { mutableStateOf<String?>(null) }
     var viewingResult by remember { mutableStateOf(false) }
+    var viewingItem by remember { mutableStateOf<SegmentItem?>(null) }
 
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -256,6 +260,14 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     )
+                    if (result.items.isNotEmpty()) {
+                        Text(
+                            text = "Extracted ${result.items.size} individual items",
+                            color = Color(0xFF2E7D32),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                     if (lastSavedPath != null) {
                         Text(
                             text = "Saved to history",
@@ -312,9 +324,70 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+
+        // Extracted Individual Items Gallery
+        resultState?.items?.takeIf { it.isNotEmpty() }?.let { items ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Extracted Items (${items.size})",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items.forEach { item ->
+                        Card(
+                            modifier = Modifier
+                                .width(120.dp)
+                                .clickable { viewingItem = item },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(100.dp)
+                                        .background(Color.DarkGray, RoundedCornerShape(6.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Image(
+                                        bitmap = item.bitmap.asImageBitmap(),
+                                        contentDescription = item.label,
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Text(
+                                    text = item.label,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    // Full-screen inspection of the segmented output.
+    // Full-screen inspection of the full segmented output.
     val resultBitmap = resultState?.foregroundBitmap
     if (viewingResult && resultBitmap != null && !resultBitmap.isRecycled) {
         ImageViewerDialog(
@@ -323,5 +396,17 @@ fun SegmenterTestScreen(modifier: Modifier = Modifier) {
             subtitle = "Segmented in ${resultState?.executionTimeMs} ms",
             onDismiss = { viewingResult = false }
         )
+    }
+
+    // Full-screen inspection of an individual item cutout.
+    viewingItem?.let { item ->
+        if (!item.bitmap.isRecycled) {
+            ImageViewerDialog(
+                bitmap = item.bitmap,
+                title = item.label,
+                subtitle = currentEngine.name,
+                onDismiss = { viewingItem = null }
+            )
+        }
     }
 }

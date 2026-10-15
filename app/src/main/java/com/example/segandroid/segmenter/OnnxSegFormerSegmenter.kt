@@ -68,8 +68,8 @@ class OnnxSegFormerSegmenter(
 
                 val outputTensor = results[0] as? OnnxTensor
                     ?: error("Model '$name' did not return a tensor output.")
-                val foregroundBitmap = try {
-                    decodeOutput(outputTensor, scaledBitmap, width, height)
+                val (foregroundBitmap, items) = try {
+                    decodeOutput(outputTensor, scaledBitmap, inputBitmap, width, height)
                 } finally {
                     inputTensor.close()
                     results.close()
@@ -78,12 +78,14 @@ class OnnxSegFormerSegmenter(
                 Result.success(
                     SegmentResult(
                         foregroundBitmap = foregroundBitmap,
+                        items = items,
                         executionTimeMs = executionTimeMs,
                         engineName = name,
                         details = mapOf(
                             "model" to modelAssetPath,
                             "input" to "${width}x$height",
                             "classes" to labels.size.toString(),
+                            "items_count" to items.size.toString()
                         )
                     )
                 )
@@ -134,7 +136,18 @@ class OnnxSegFormerSegmenter(
 
     // ----- output decoding -----------------------------------------------------
 
-    private fun decodeOutput(output: OnnxTensor, original: Bitmap, width: Int, height: Int): Bitmap {
+    private data class DecodedOutput(
+        val compositeBitmap: Bitmap,
+        val items: List<SegmentItem>
+    )
+
+    private fun decodeOutput(
+        output: OnnxTensor,
+        scaledOriginal: Bitmap,
+        highResOriginal: Bitmap,
+        width: Int,
+        height: Int
+    ): DecodedOutput {
         return when (val value = output.value) {
             // SegFormer logits as a nested array: [1][classes][maskHeight][maskWidth]
             is Array<*> -> {
@@ -144,7 +157,7 @@ class OnnxSegFormerSegmenter(
                 val classes = perClass.size
                 val maskHeight = if (classes > 0) perClass[0].size else 0
                 val maskWidth = if (maskHeight > 0) perClass[0][0].size else 0
-                buildCutout(original, classes, maskHeight, maskWidth, width, height) { c, y, x ->
+                buildCutoutAndItems(scaledOriginal, highResOriginal, classes, maskHeight, maskWidth, width, height) { c, y, x ->
                     perClass[c][y][x]
                 }
             }
@@ -159,7 +172,7 @@ class OnnxSegFormerSegmenter(
                 val floats = FloatArray(buffer.remaining())
                 buffer.get(floats)
                 val plane = maskHeight * maskWidth
-                buildCutout(original, classes, maskHeight, maskWidth, width, height) { c, y, x ->
+                buildCutoutAndItems(scaledOriginal, highResOriginal, classes, maskHeight, maskWidth, width, height) { c, y, x ->
                     floats[c * plane + y * maskWidth + x]
                 }
             }
@@ -168,18 +181,19 @@ class OnnxSegFormerSegmenter(
 
     /**
      * Picks, per output pixel, the highest-logit class and keeps the pixel only when
-     * [GarmentKeepPolicy] keeps that class's label. The mask is nearest-neighbour upsampled
-     * to [width] x [height].
+     * [GarmentKeepPolicy] keeps that class's label. Generates both the full composite cutout
+     * and extracts individual item/instance cutouts via [ConnectedComponents].
      */
-    private fun buildCutout(
-        original: Bitmap,
+    private fun buildCutoutAndItems(
+        scaledOriginal: Bitmap,
+        highResOriginal: Bitmap,
         classes: Int,
         maskHeight: Int,
         maskWidth: Int,
         width: Int,
         height: Int,
         logit: (c: Int, y: Int, x: Int) -> Float,
-    ): Bitmap {
+    ): DecodedOutput {
         if (classes != labels.size) {
             error(
                 "Label count mismatch for '$name': model produced $classes classes but " +
@@ -187,33 +201,62 @@ class OnnxSegFormerSegmenter(
             )
         }
 
-        val pixels = IntArray(width * height)
-        original.getPixels(pixels, 0, width, 0, 0, width, height)
+        val maskLabels = Array(maskHeight) { Array<String?>(maskWidth) { null } }
 
-        for (y in 0 until height) {
-            val maskY = (y * maskHeight / height).coerceIn(0, maskHeight - 1)
-            for (x in 0 until width) {
-                val maskX = (x * maskWidth / width).coerceIn(0, maskWidth - 1)
-
+        for (my in 0 until maskHeight) {
+            for (mx in 0 until maskWidth) {
                 var maxClass = 0
                 var maxLogit = Float.NEGATIVE_INFINITY
                 for (c in 0 until classes) {
-                    val value = logit(c, maskY, maskX)
+                    val value = logit(c, my, mx)
                     if (value > maxLogit) {
                         maxLogit = value
                         maxClass = c
                     }
                 }
 
-                if (!GarmentKeepPolicy.shouldKeep(labels[maxClass])) {
-                    pixels[y * width + x] = Color.TRANSPARENT
+                val labelName = labels[maxClass]
+                if (GarmentKeepPolicy.shouldKeep(labelName)) {
+                    maskLabels[my][mx] = labelName
                 }
             }
         }
 
-        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        output.setPixels(pixels, 0, width, 0, 0, width, height)
-        return output
+        // Composite cutout bitmap
+        val compositePixels = IntArray(width * height)
+        scaledOriginal.getPixels(compositePixels, 0, width, 0, 0, width, height)
+
+        for (y in 0 until height) {
+            val maskY = (y * maskHeight / height).coerceIn(0, maskHeight - 1)
+            for (x in 0 until width) {
+                val maskX = (x * maskWidth / width).coerceIn(0, maskWidth - 1)
+                if (maskLabels[maskY][maskX] == null) {
+                    compositePixels[y * width + x] = Color.TRANSPARENT
+                }
+            }
+        }
+
+        val compositeOutput = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        compositeOutput.setPixels(compositePixels, 0, width, 0, 0, width, height)
+
+        // Extract individual instance/item blobs
+        val blobs = ConnectedComponents.extractItemBlobs(
+            originalBitmap = highResOriginal,
+            maskLabels = maskLabels,
+            maskWidth = maskWidth,
+            maskHeight = maskHeight
+        )
+
+        val items = blobs.mapIndexed { idx, blob ->
+            SegmentItem(
+                id = "item_$idx",
+                label = blob.label,
+                bitmap = blob.cutoutBitmap,
+                bounds = blob.bounds
+            )
+        }
+
+        return DecodedOutput(compositeOutput, items)
     }
 
     /** Converts a Bitmap to an NCHW normalized FloatBuffer using this model's mean/std. */
